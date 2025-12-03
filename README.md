@@ -51,10 +51,10 @@ Epoch split: 60/60 domain/object
 Learning rate: 1e-2
 
 Epoch split: 45/75 domain/object
-- Domain Classifier Accuracy:
-- Object Classifier Accuracy:
-- In-Domain Classification Accuracy:
-- Out-Domain Classification Accuracy:
+- Domain Classifier Accuracy: 62.1%
+- Object Classifier Accuracy: 51.4%
+- In-Domain Classification Accuracy: 35.7%
+- Out-Domain Classification Accuracy: 15.1%
 
 These results are achieved through running in Google Colab with T4 GPU in approximately 30 minutes. 
 
