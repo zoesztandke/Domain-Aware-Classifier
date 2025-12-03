@@ -7,40 +7,42 @@ Original file is located at
     https://colab.research.google.com/drive/18dMPve3-JOZSCskZseNluhERgteknuPZ
 """
 
-import torch
-from torchvision import datasets, transforms
-from torch.utils.data import DataLoader, Dataset, ConcatDataset
+from torch import nn, cuda, hub, sigmoid, tensor, save, load, no_grad, max
+from torch.utils.data import Dataset, ConcatDataset, DataLoader
 from torch.optim import Adam
-from torch import nn
-import numpy as np
+
+from torchvision import datasets, transforms
+from numpy.random import randint
 from tqdm.auto import tqdm
 
-# code block for google colab
 # from google.colab import drive
 # drive.mount('/content/drive')
 
-if torch.cuda.is_available():
+if cuda.is_available():
   DEVICE = 'cuda'
 else:
   DEVICE = 'cpu'
+
+print(f'using device: {DEVICE}')
 
 TRANSFORM = transforms.Compose([
         transforms.Resize((128, 128)),
         transforms.ToTensor()
     ])
 
-DOMAIN_EPOCHS = 60
-PRED_EPOCHS = 60
+DOMAIN_EPOCHS = 1
+PRED_EPOCHS = 1
 BATCH_SIZE = 16
+LEARNING_RATE = 0.01
 
 class MyModel(nn.Module):
     def __init__(self, train_mode: bool=False, domain: bool=False, num_classes: int=10):
         super().__init__()
-        self.prediction_model = torch.hub.load('pytorch/vision:v0.10.0', 'mobilenet_v2', weights=None)
+        self.prediction_model = hub.load('pytorch/vision:v0.10.0', 'mobilenet_v2', weights=None)
         self.prediction_model.classifier[1] = nn.Linear(self.prediction_model.last_channel, num_classes)
         self.prediction_model.to(DEVICE)
 
-        self.domain_model = torch.hub.load('pytorch/vision:v0.10.0', 'mobilenet_v2', weights=None)
+        self.domain_model = hub.load('pytorch/vision:v0.10.0', 'mobilenet_v2', weights=None)
         self.domain_model.classifier[1] = nn.Linear(self.domain_model.last_channel, 1)
         self.domain_model.to(DEVICE)
 
@@ -58,16 +60,16 @@ class MyModel(nn.Module):
                 return self.prediction_model(img)
 
         # normal prediction flow
-        logit = self.domain_model(img)
-        logit = logit.view(1, -1)
+        logits = self.domain_model(img)
+        logits = logits.view(-1, 1)
+        probs = sigmoid(logits)
 
-        prob = torch.sigmoid(logit)
         predictions = self.prediction_model(img)
 
-        for i, p in enumerate(prob.flatten()):
+        for i, p in enumerate(probs.flatten()):
             if p < 0.5:
-                artificial_prediction = torch.tensor([0] * 10)
-                rand_num = np.random.randint(0, 10)
+                artificial_prediction = tensor([0] * 10)
+                rand_num = randint(0, 10)
                 artificial_prediction[rand_num] = 1
                 predictions[i] = artificial_prediction
 
@@ -107,6 +109,7 @@ def learn(path_to_in_domain: str, path_to_out_domain: str):
     model = MyModel()
 
     # train domain
+    model.train()
     model.train_mode = True
     model.domain = True
 
@@ -137,6 +140,7 @@ def learn(path_to_in_domain: str, path_to_out_domain: str):
 
 
     # train prediction
+    model.train()
     model.train_mode = True
     model.domain = False
 
@@ -160,7 +164,7 @@ def learn(path_to_in_domain: str, path_to_out_domain: str):
 
             optimizer.step()
         print(f'running loss for epoch {e}: {running_loss}')
-    torch.save(model.state_dict(), 'myModel.pth')
+    save(model.state_dict(), 'myModel.pth')
     return model
 
 def accuracy(path_to_eval_folder: str, model) -> float:
@@ -173,7 +177,7 @@ def accuracy(path_to_eval_folder: str, model) -> float:
     correct = 0
     total = 0
 
-    with torch.no_grad():
+    with no_grad():
         for inputs, labels in tqdm(data_loader, total=len(data_loader)):
             inputs = inputs.to(DEVICE)
             labels = labels.to(DEVICE)
@@ -182,7 +186,7 @@ def accuracy(path_to_eval_folder: str, model) -> float:
             outputs = outputs.view(-1, 10)
             outputs = outputs.to(DEVICE)
 
-            _, predicted = torch.max(outputs, dim=1)
+            _, predicted = max(outputs, dim=1)
 
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
@@ -190,20 +194,22 @@ def accuracy(path_to_eval_folder: str, model) -> float:
     return correct/total
 
 # model = MyModel()
-model = learn('drive/MyDrive/A4data/in-domain-train', 'drive/MyDrive/A4data/out-domain-train')
+# model = learn('drive/MyDrive/A4data/in-domain-train', 'drive/MyDrive/A4data/out-domain-train')
+model = learn('A4data/in-domain-train', 'A4data/out-domain-train')
+
 
 new_model = MyModel()
 new_model.to(DEVICE)
-state_dict = torch.load('myModel.pth', map_location=DEVICE)
+state_dict = load('myModel.pth', map_location=DEVICE)
 new_model.load_state_dict(state_dict)
 
-# learned model accuracy
-in_acc = accuracy('drive/MyDrive/A4data/in-domain-eval', new_model)
-print(in_acc)
-out_acc = accuracy('drive/MyDrive/A4data/out-domain-eval', new_model)
-print(out_acc)
+# acc = accuracy('drive/MyDrive/A4data/in-domain-eval', new_model)
+acc = accuracy('A4data/in-domain-eval', new_model)
+print(f'accuracy on in domain: {acc}')
+# acc_2 = accuracy('drive/MyDrive/A4data/out-domain-eval', new_model)
+acc_2 = accuracy('A4data/out-domain-eval', new_model)
+print(f'accuracy on out domain: {acc_2}')
 
-# helper functions
 def test_domain_model(model, in_dom, out_dom):
     comb = get_domain_data(in_dom, out_dom)
 
@@ -214,7 +220,7 @@ def test_domain_model(model, in_dom, out_dom):
     correct = 0
     total = 0
 
-    with torch.no_grad():
+    with no_grad():
         for inputs, labels in tqdm(comb, total=len(comb)):
             inputs = inputs.to(DEVICE)
             labels = labels.to(DEVICE)
@@ -222,7 +228,7 @@ def test_domain_model(model, in_dom, out_dom):
 
             logits = model(inputs)
             logits = logits.view(-1, 1)
-            probs = torch.sigmoid(logits)
+            probs = sigmoid(logits)
 
             preds = (probs > 0.5).long()
 
@@ -230,6 +236,11 @@ def test_domain_model(model, in_dom, out_dom):
             correct += (preds == labels).sum().item()
 
     return correct/total
+
+# exp = test_domain_model(new_model, 'drive/MyDrive/A4data/in-domain-eval', 'drive/MyDrive/A4data/out-domain-eval')
+exp = test_domain_model(new_model, 'A4data/in-domain-eval', 'A4data/out-domain-eval')
+print(f'accuracy of domain model: {exp}')
+
 def test_prediction_model(model, in_dom):
     data = datasets.ImageFolder(in_dom, transform=TRANSFORM)
     data_loader = DataLoader(data, batch_size=BATCH_SIZE, shuffle=True)
@@ -241,7 +252,7 @@ def test_prediction_model(model, in_dom):
     correct = 0
     total = 0
 
-    with torch.no_grad():
+    with no_grad():
         for inputs, labels in tqdm(data_loader, total=len(data_loader)):
             inputs = inputs.to(DEVICE)
             labels = labels.to(DEVICE)
@@ -250,15 +261,13 @@ def test_prediction_model(model, in_dom):
             outputs = outputs.view(-1, 10)
             outputs = outputs.to(DEVICE)
 
-            _, predicted = torch.max(outputs, dim=1)
+            _, predicted = max(outputs, dim=1)
 
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
 
     return correct/total
 
-domain_acc = test_domain_model(new_model, 'drive/MyDrive/A4data/in-domain-eval', 'drive/MyDrive/A4data/out-domain-eval')
-print(domain_acc)
-pred_acc = test_prediction_model(new_model, 'drive/MyDrive/A4data/in-domain-eval')
-print(pred_acc)
-
+# exp = test_prediction_model(new_model, 'drive/MyDrive/A4data/in-domain-eval')
+exp = test_prediction_model(new_model, 'A4data/in-domain-eval')
+print(f'accuracy of prediction model: {exp}')
