@@ -45,6 +45,8 @@ project/
 - In-Domain Classification Accuracy: 41.3%
 - Out-Domain Classification Accuracy: 21.6%
 
+These results are achieved through running in Google Colab with T4 GPU in approximately 30 minutes. 
+
 
 
 
