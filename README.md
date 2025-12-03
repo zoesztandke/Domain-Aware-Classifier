@@ -36,6 +36,7 @@ Epoch split: 60/60 domain/object
 - In-Domain Classification Accuracy: 41.3%
 - Out-Domain Classification Accuracy: 21.6%
 
+---
 
 Learning rate: 1e-3
 
@@ -45,6 +46,7 @@ Epoch split: 60/60 domain/object
 - In-Domain Classification Accuracy: 41.9%
 - Out-Domain Classification Accuracy: 17.8%
 
+---
 
 Learning rate: 1e-2
 
