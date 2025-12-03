@@ -28,9 +28,26 @@ During evaluation:
 Training must fit within a 30-minute runtime limit, which restricts training time and model size. Because of this constraint, current accuracies are lower. Further training outside the time limit is expected to improve performance. 
 
 ## 4. Experimental Results
+1e-4
+epochs 60/60
 - Domain Classifier Accuracy: 65.0%
+- Object Classifier Accuracy: 44%
 - In-Domain Classification Accuracy: 41.3%
 - Out-Domain Classification Accuracy: 21.6%
+
+1e-3
+epochs 60/60
+- Domain Classifier Accuracy: 63.9%
+- Object Classifier Accuracy: 52.0%
+- In-Domain Classification Accuracy: 41.9%
+- Out-Domain Classification Accuracy: 17.8%
+
+1e-2
+epochs 45/75
+- Domain Classifier Accuracy:
+- Object Classifier Accuracy:
+- In-Domain Classification Accuracy:
+- Out-Domain Classification Accuracy:
 
 These results are achieved through running in Google Colab with T4 GPU in approximately 30 minutes. 
 
