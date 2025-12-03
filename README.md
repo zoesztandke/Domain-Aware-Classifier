@@ -27,19 +27,6 @@ During evaluation:
 ## 3. Training Constraints and Current Limitations
 Training must fit within a 30-minute runtime limit, which restricts training time and model size. Because of this constraint, current accuracies are lower. Further training outside the time limit is expected to improve performance. 
 
-```
-project/
-│-- A4data/
-│   ├── in-domain-train/
-│   ├── out-domain-train/
-│   ├── in-domain-eval/
-│   └── out-domain-eval/
-|
-│-- A4codes.py
-│-- notebookA4.ipynb
-│-- README.md
-```
-
 ## 4. Experimental Results
 - Domain Classifier Accuracy: 65.0%
 - In-Domain Classification Accuracy: 41.3%
