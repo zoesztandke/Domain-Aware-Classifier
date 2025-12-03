@@ -35,7 +35,7 @@ PRED_EPOCHS = 1
 BATCH_SIZE = 16
 LEARNING_RATE = 0.01
 
-class MyModel(nn.Module):
+class DualModel(nn.Module):
     def __init__(self, train_mode: bool=False, domain: bool=False, num_classes: int=10):
         super().__init__()
         self.prediction_model = hub.load('pytorch/vision:v0.10.0', 'mobilenet_v2', weights=None)
@@ -49,31 +49,46 @@ class MyModel(nn.Module):
         self.train_mode = train_mode
         self.domain = domain
 
-    def forward(self, img):
-        # training prediction flow
+    def forward(self, imgs):
+        """
+        If the model is in training mode:
+        -> If the model is in domain mode:
+        ---> Train domain model
+        -> Otherwise:
+        ---> Train prediction model
+
+        If the model is in prediction mode:
+        -> If the image is predicted to be in-domain:
+        ---> Use prediction model to predict class
+        -> Otherwise
+        ---> Predict a random class
+        """
+        # training flow
         if self.train_mode:
+            # if training domain model
             if self.domain:
-                prob = self.domain_model(img)
-                prob = prob.view(-1, 1)
-                return prob
+                domain_logits = self.domain_model(imgs)
+                domain_logits = domain_logits.view(-1, 1)
+                return domain_logits
+            # if training prediction model
             else:
-                return self.prediction_model(img)
+                class_logits = self.prediction_model(imgs)
+                return class_logits
 
         # normal prediction flow
-        logits = self.domain_model(img)
-        logits = logits.view(-1, 1)
-        probs = sigmoid(logits)
+        domain_logits = self.domain_model(imgs)
+        domain_logits = domain_logits.view(-1, 1)
+        domain_probs = sigmoid(domain_logits)
 
-        predictions = self.prediction_model(img)
+        class_logits = self.prediction_model(imgs)
 
-        for i, p in enumerate(probs.flatten()):
+        for i, p in enumerate(domain_probs.flatten()):
             if p < 0.5:
                 artificial_prediction = tensor([0] * 10)
                 rand_num = randint(0, 10)
                 artificial_prediction[rand_num] = 1
-                predictions[i] = artificial_prediction
-
-        return predictions
+                class_logits[i] = artificial_prediction
+        return class_logits
 
 class BinaryDataLoader(Dataset):
     def __init__(self, dataset, label):
@@ -106,7 +121,7 @@ def learn(path_to_in_domain: str, path_to_out_domain: str):
 
     comb = get_domain_data(path_to_in_domain, path_to_out_domain)
 
-    model = MyModel()
+    model = DualModel()
 
     # train domain
     model.train()
@@ -193,12 +208,12 @@ def accuracy(path_to_eval_folder: str, model) -> float:
 
     return correct/total
 
-# model = MyModel()
+# model = DualModel()
 # model = learn('drive/MyDrive/A4data/in-domain-train', 'drive/MyDrive/A4data/out-domain-train')
 model = learn('A4data/in-domain-train', 'A4data/out-domain-train')
 
 
-new_model = MyModel()
+new_model = DualModel()
 new_model.to(DEVICE)
 state_dict = load('myModel.pth', map_location=DEVICE)
 new_model.load_state_dict(state_dict)
