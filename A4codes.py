@@ -1,67 +1,79 @@
-import torch
-from torchvision import datasets, transforms
-from torch.utils.data import DataLoader, Dataset, ConcatDataset
+from torch import nn, cuda, hub, sigmoid, tensor, save, load, no_grad, max
+from torch.utils.data import Dataset, ConcatDataset, DataLoader
 from torch.optim import Adam
-from torch import nn
-import numpy as np
-from tqdm.auto import tqdm
 
-# from google.colab import drive
-# drive.mount('/content/drive')
+from torchvision import datasets, transforms
+from numpy.random import randint
 
-if torch.cuda.is_available():
+if cuda.is_available():
   DEVICE = 'cuda'
 else:
   DEVICE = 'cpu'
 
+# global variables
 TRANSFORM = transforms.Compose([
         transforms.Resize((128, 128)),
         transforms.ToTensor()
     ])
+DOMAIN_EPOCHS = 1
+PRED_EPOCHS = 1
+BATCH_SIZE = 32
+LEARNING_RATE = 1e-3
 
-DOMAIN_EPOCHS = 60
-PRED_EPOCHS = 60
-BATCH_SIZE = 16
-
-class MyModel(nn.Module):
-    def __init__(self, train_mode: bool = False, domain: bool = False, num_classes: int = 10):
+class DualModel(nn.Module):
+    def __init__(self, train_mode: bool=False, domain_mode: bool=False, num_classes: int=10):
         super().__init__()
-        self.prediction_model = torch.hub.load('pytorch/vision:v0.10.0', 'mobilenet_v2', weights=None)
+        self.prediction_model = hub.load('pytorch/vision:v0.10.0', 'mobilenet_v2', weights=None)
         self.prediction_model.classifier[1] = nn.Linear(self.prediction_model.last_channel, num_classes)
         self.prediction_model.to(DEVICE)
 
-        self.domain_model = torch.hub.load('pytorch/vision:v0.10.0', 'mobilenet_v2', weights=None)
+        self.domain_model = hub.load('pytorch/vision:v0.10.0', 'mobilenet_v2', weights=None)
         self.domain_model.classifier[1] = nn.Linear(self.domain_model.last_channel, 1)
         self.domain_model.to(DEVICE)
 
         self.train_mode = train_mode
-        self.domain = domain
+        self.domain_mode = domain_mode
 
-    def forward(self, img):
-        # training prediction flow
+    def forward(self, imgs):
+        """
+        If the model is in training mode:
+        -> If the model is in domain mode:
+        ---> Train domain model
+        -> Otherwise:
+        ---> Train prediction model
+
+        If the model is in prediction mode:
+        -> If the image is predicted to be in-domain:
+        ---> Use prediction model to predict class
+        -> Otherwise
+        ---> Predict a random class
+        """
+        # training flow
         if self.train_mode:
-            if self.domain:
-                prob = self.domain_model(img)
-                prob = prob.view(-1, 1)
-                return prob
+            # if training domain model
+            if self.domain_mode:
+                domain_logits = self.domain_model(imgs)
+                domain_logits = domain_logits.view(-1, 1)
+                return domain_logits
+            # if training prediction model
             else:
-                return self.prediction_model(img)
+                class_logits = self.prediction_model(imgs)
+                return class_logits
 
         # normal prediction flow
-        logit = self.domain_model(img)
-        logit = logit.view(1, -1)
+        domain_logits = self.domain_model(imgs)
+        domain_logits = domain_logits.view(-1, 1)
+        domain_probs = sigmoid(domain_logits)
 
-        prob = torch.sigmoid(logit)
-        predictions = self.prediction_model(img)
+        class_logits = self.prediction_model(imgs)
 
-        for i, p in enumerate(prob.flatten()):
+        for i, p in enumerate(domain_probs.flatten()):
             if p < 0.5:
-                artificial_prediction = torch.tensor([0] * 10)
-                rand_num = np.random.randint(0, 10)
+                artificial_prediction = tensor([0] * 10)
+                rand_num = randint(0, 10)
                 artificial_prediction[rand_num] = 1
-                predictions[i] = artificial_prediction
-
-        return predictions
+                class_logits[i] = artificial_prediction
+        return class_logits
 
 class BinaryDataLoader(Dataset):
     def __init__(self, dataset, label):
@@ -77,6 +89,11 @@ class BinaryDataLoader(Dataset):
         return item, label
 
 def get_domain_data(in_path, out_path):
+    """
+    Takes the filepath to in-domain and out-domain training data. Combines the in and out domain training data into
+    a single, binary data loader. Labels the in-domain data as 1 and the out-domain data as 0. Allows the domain
+    model to learn from these labels.
+    """
     in_data = datasets.ImageFolder(in_path, transform=TRANSFORM)
     out_data = datasets.ImageFolder(out_path, transform=TRANSFORM)
 
@@ -88,26 +105,31 @@ def get_domain_data(in_path, out_path):
 
     return combined_data_loader
 
-
 def learn(path_to_in_domain: str, path_to_out_domain: str):
+    """
+    Takes file-paths to in-domain and out-domain training data. First, reads in the in-domain and out-domain training
+    data, and uses a binary dataloader to train the domain classifier for DOMAIN_EPOCHS epochs. Next, reads the
+    in-domain training data into a dataloader with 10 different labels, and trains the prediction model on only this
+    data (excludes out-domain). Returns a dual model of class DualModel.
+    """
     in_data = datasets.ImageFolder(path_to_in_domain, transform=TRANSFORM)
-
     in_data_loader = DataLoader(in_data, batch_size=BATCH_SIZE, shuffle=True)
-    comb = get_domain_data(path_to_in_domain, path_to_out_domain)
 
-    model = MyModel()
+    combined_data_loader = get_domain_data(path_to_in_domain, path_to_out_domain)
+
+    dual_model = DualModel()
+    dual_model.train_mode = True
 
     # train domain
-    model.train_mode = True
-    model.domain = True
+    dual_model.train()
+    dual_model.domain_mode = True
 
-    optimizer = Adam(model.parameters(), lr=1e-4)
+    optimizer = Adam(dual_model.parameters(), lr=LEARNING_RATE)
     criterion = nn.BCEWithLogitsLoss()
 
     for e in range(DOMAIN_EPOCHS):
-        print(f'epoch: {e}')
         running_loss = 0.
-        for i, data in tqdm(enumerate(comb), total=len(comb)):
+        for data in combined_data_loader:
             inputs, labels = data
             inputs = inputs.to(DEVICE)
 
@@ -115,7 +137,7 @@ def learn(path_to_in_domain: str, path_to_out_domain: str):
             labels = labels.to(DEVICE)
 
             optimizer.zero_grad()
-            outputs = model(inputs)
+            outputs = dual_model(inputs)
 
             loss = criterion(outputs.float(), labels.float())
             running_loss += loss.item()
@@ -123,131 +145,56 @@ def learn(path_to_in_domain: str, path_to_out_domain: str):
 
             optimizer.step()
 
-        print(f'running loss for epoch {e}: {running_loss}')
-
     # train prediction
-    model.train_mode = True
-    model.domain = False
+    dual_model.train()
+    dual_model.domain_mode = False
 
-    optimizer = Adam(model.parameters(), lr=1e-4)
+    optimizer = Adam(dual_model.parameters(), lr=LEARNING_RATE)
     criterion = nn.CrossEntropyLoss()
 
     for e in range(PRED_EPOCHS):
-        print(f'epoch: {e}')
         running_loss = 0.
-        for i, data in tqdm(enumerate(in_data_loader), total=len(in_data_loader)):
+        for data in in_data_loader:
             inputs, labels = data
             inputs = inputs.to(DEVICE)
             labels = labels.to(DEVICE)
 
             optimizer.zero_grad()
-            outputs = model(inputs)
+            outputs = dual_model(inputs)
 
             loss = criterion(outputs, labels)
             running_loss += loss.item()
             loss.backward()
 
             optimizer.step()
-        print(f'running loss for epoch {e}: {running_loss}')
+    return dual_model
 
-    # torch.save(model.state_dict(), 'myModel.pth')
-    return model
-
-def accuracy(path_to_eval_folder: str, model) -> float:
+def accuracy(path_to_eval_folder: str, dual_model: DualModel) -> float:
+    """
+    Takes a folder of images and a DualModel. Predicts the class of the objects in the images, and return an accuracy
+    for how many were classified correctly.
+    """
     data = datasets.ImageFolder(path_to_eval_folder, transform=TRANSFORM)
     data_loader = DataLoader(data, batch_size=BATCH_SIZE, shuffle=True)
 
-    model.train_mode = False
-    model.eval()
+    dual_model.train_mode = False
+    dual_model.eval()
 
     correct = 0
     total = 0
 
-    with torch.no_grad():
-        for inputs, labels in tqdm(data_loader, total=len(data_loader)):
+    with no_grad():
+        for inputs, labels in data_loader:
             inputs = inputs.to(DEVICE)
             labels = labels.to(DEVICE)
 
-            outputs = model(inputs)
+            outputs = dual_model(inputs)
             outputs = outputs.view(-1, 10)
             outputs = outputs.to(DEVICE)
 
-            _, predicted = torch.max(outputs, dim=1)
+            _, predicted = max(outputs, dim=1)
 
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
 
     return correct/total
-
-model = learn('A4data/in-domain-train', 'A4data/out-domain-train')
-
-new_model = MyModel()
-new_model.to(DEVICE)
-state_dict = torch.load('myModel.pth', map_location=DEVICE)
-new_model.load_state_dict(state_dict)
-
-# helper func
-def test_domain_model(model, in_dom, out_dom):
-    comb = get_domain_data(in_dom, out_dom)
-
-    model.train_mode = True
-    model.domain = True
-    model.eval()
-
-    correct = 0
-    total = 0
-
-    with torch.no_grad():
-        for inputs, labels in tqdm(comb, total=len(comb)):
-            inputs = inputs.to(DEVICE)
-            labels = labels.to(DEVICE)
-            labels = labels.view(-1, 1)
-
-            logits = model(inputs)
-            logits = logits.view(-1, 1)
-            probs = torch.sigmoid(logits)
-
-            preds = (probs > 0.5).long()
-
-            total += labels.size(0)
-            correct += (preds == labels).sum().item()
-
-    return correct / total
-
-def test_prediction_model(model, in_dom):
-    data = datasets.ImageFolder(in_dom, transform=TRANSFORM)
-    data_loader = DataLoader(data, batch_size=BATCH_SIZE, shuffle=True)
-
-    model.train_mode = True
-    model.domain = False
-    model.eval()
-
-    correct = 0
-    total = 0
-
-    with torch.no_grad():
-        for inputs, labels in tqdm(data_loader, total=len(data_loader)):
-            inputs = inputs.to(DEVICE)
-            labels = labels.to(DEVICE)
-
-            outputs = model(inputs)
-            outputs = outputs.view(-1, 10)
-            outputs = outputs.to(DEVICE)
-
-            _, predicted = torch.max(outputs, dim=1)
-
-            total += labels.size(0)
-            correct += (predicted == labels).sum().item()
-
-    return correct/total
-
-helper_acc_1 = test_domain_model(new_model, 'A4data/in-domain-eval', 'A4data/out-domain-eval')
-print(helper_acc_1)
-
-helper_acc_2 = test_prediction_model(new_model, 'A4data/in-domain-eval')
-print(helper_acc_2)
-
-acc = accuracy('A4data/in-domain-eval', model)
-print(acc)
-acc_2 = accuracy('A4data/out-domain-eval', model)
-print(acc_2)
